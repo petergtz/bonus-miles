@@ -33,7 +33,7 @@ func main() {
 
 	Must(e)
 	httpClient := target.Client().HTTPClient()
-	tempFile, e := ioutil.TempFile("", "bonus-miles-*.md")
+	tempFile, e := ioutil.TempFile("", "bonus-miles-*.html")
 	Must(e)
 	defer tempFile.Close()
 
@@ -66,8 +66,13 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 		versions = append(versions, v)
 	}
 
-	fmt.Fprintln(tempFile, "version|", strings.Join(jobsNames, "|"))
-	fmt.Fprintln(tempFile, strings.Repeat("---|", len(jobsNames))+"---")
+	fmt.Fprintln(tempFile, `<html>
+	<head><link rel="stylesheet" href="https://sindresorhus.com/github-markdown-css/github-markdown.css"></head>
+	<body>
+		<article class="markdown-body">
+	        <table>
+	`)
+	fmt.Fprintln(tempFile, "<tr><th>version</th><th>", strings.Join(jobsNames, "</th><th>"), "</th></tr>")
 	for _, version := range versions {
 		resp, e = httpClient.Get(versionsURL + "/" + strconv.Itoa(versionIDs[version]) + "/input_to")
 		Must(e)
@@ -83,7 +88,7 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 				buildSet[build.JobName] = build.Status
 			}
 		}
-		fmt.Fprint(tempFile, version)
+		fmt.Fprint(tempFile, "<tr><td>", version)
 		for _, jobName := range jobsNames {
 			status := buildSet[jobName]
 			if status == "succeeded" {
@@ -92,10 +97,14 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 			if status == "failed" {
 				status = "<span style=\"color:red\">!</span>"
 			}
-			fmt.Fprint(tempFile, "|", status)
+			fmt.Fprint(tempFile, "</td><td>", status)
 		}
-		fmt.Fprintln(tempFile)
+		fmt.Fprintln(tempFile, "</td></tr>")
 	}
+	fmt.Fprintln(tempFile, `</table>
+		</article>
+	</body>
+	</html>`)
 }
 
 func Must(e error) {
