@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,11 +15,6 @@ import (
 	"github.com/concourse/fly/rc"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
-
-type TargetToken struct {
-	Type  string `yaml:"type"`
-	Value string `yaml:"value"`
-}
 
 var (
 	targetName      = kingpin.Flag("target", "Concourse Target").Required().Short('t').String()
@@ -35,9 +32,21 @@ func main() {
 	target, e := rc.LoadTarget(rc.TargetName(*targetName), true)
 
 	Must(e)
-	httpsClient := target.Client().HTTPClient()
+	httpClient := target.Client().HTTPClient()
+	tempFile, e := ioutil.TempFile("", "bonus-miles-*.md")
+	Must(e)
+	defer tempFile.Close()
 
-	resp, e := httpsClient.Get(target.URL() + "/api/v1/teams/" + target.Team().Name() + "/pipelines/" + *pipeline + "/resources/" + *resourceToTrack + "/versions")
+	generateOutput(httpClient, jobsNames, tempFile, target.URL()+"/api/v1/teams/"+target.Team().Name()+"/pipelines/"+*pipeline+"/resources/"+*resourceToTrack+"/versions")
+	if *shouldAutoOpen {
+		Must(exec.Command("open", tempFile.Name()).Run())
+	} else {
+		fmt.Println("Markdown can be found at:", tempFile.Name())
+	}
+}
+
+func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Writer, versionsURL string) {
+	resp, e := httpClient.Get(versionsURL)
 	Must(e)
 
 	content, e := ioutil.ReadAll(resp.Body)
@@ -57,14 +66,10 @@ func main() {
 		versions = append(versions, v)
 	}
 
-	tempFile, e := ioutil.TempFile("", "bonus-miles-*.md")
-	Must(e)
-	defer tempFile.Close()
-
 	fmt.Fprintln(tempFile, "version|", strings.Join(jobsNames, "|"))
 	fmt.Fprintln(tempFile, strings.Repeat("---|", len(jobsNames))+"---")
 	for _, version := range versions {
-		resp, e = httpsClient.Get(target.URL() + "/api/v1/teams/" + target.Team().Name() + "/pipelines/" + *pipeline + "/resources/" + *resourceToTrack + "/versions/" + strconv.Itoa(versionIDs[version]) + "/input_to")
+		resp, e = httpClient.Get(versionsURL + "/" + strconv.Itoa(versionIDs[version]) + "/input_to")
 		Must(e)
 		content, e = ioutil.ReadAll(resp.Body)
 		Must(e)
@@ -90,11 +95,6 @@ func main() {
 			fmt.Fprint(tempFile, "|", status)
 		}
 		fmt.Fprintln(tempFile)
-	}
-	if *shouldAutoOpen {
-		Must(exec.Command("open", tempFile.Name()).Run())
-	} else {
-		fmt.Println("Markdown can be found at:", tempFile.Name())
 	}
 }
 
