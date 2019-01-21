@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/concourse/atc"
 	"github.com/concourse/fly/rc"
@@ -33,16 +34,20 @@ func main() {
 
 	Must(e)
 	httpClient := target.Client().HTTPClient()
-	tempFile, e := ioutil.TempFile("", "bonus-miles-*.html")
-	Must(e)
-	defer tempFile.Close()
 
-	generateOutput(httpClient, jobsNames, tempFile, target.URL()+"/api/v1/teams/"+target.Team().Name()+"/pipelines/"+*pipeline+"/resources/"+*resourceToTrack+"/versions")
-	if *shouldAutoOpen {
-		Must(exec.Command("open", tempFile.Name()).Run())
-	} else {
-		fmt.Println("Markdown can be found at:", tempFile.Name())
-	}
+	http.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
+		generateOutput(httpClient, jobsNames, rw, target.URL()+"/api/v1/teams/"+target.Team().Name()+"/pipelines/"+*pipeline+"/resources/"+*resourceToTrack+"/versions")
+	})
+	addr := "127.0.0.1:12345"
+	go func() {
+		time.Sleep(time.Second)
+		fmt.Println("Server running at:", "http://"+addr)
+		if *shouldAutoOpen {
+			Must(exec.Command("open", "http://"+addr).Run())
+		}
+	}()
+	e = http.ListenAndServe(addr, nil)
+	Must(e)
 }
 
 func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Writer, versionsURL string) {
@@ -67,7 +72,10 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 	}
 
 	fmt.Fprintln(tempFile, `<html>
-	<head><link rel="stylesheet" href="https://sindresorhus.com/github-markdown-css/github-markdown.css"></head>
+	<head>
+		<link rel="stylesheet" href="https://sindresorhus.com/github-markdown-css/github-markdown.css">
+		<meta http-equiv="refresh" content="30"/>
+	</head>
 	<body>
 		<article class="markdown-body">
 	        <table>
