@@ -73,14 +73,14 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 
 	fmt.Fprintln(tempFile, `<html>
 	<head>
-		<link rel="stylesheet" href="https://sindresorhus.com/github-markdown-css/github-markdown.css">
+		<link rel="stylesheet" href="https://bootswatch.com/4/darkly/bootstrap.css" media="screen">
+		<link rel="stylesheet" href="https://bootswatch.com/_assets/css/custom.min.css">
 		<meta http-equiv="refresh" content="30"/>
 	</head>
 	<body>
-		<article class="markdown-body">
-	        <table>
-	`)
-	fmt.Fprintln(tempFile, "<tr><th>version</th><th>", strings.Join(jobsNames, "</th><th>"), "</th></tr>")
+	        <table class="table table-hover">`)
+
+	fmt.Fprintln(tempFile, `<thead><tr><th scope="col">version</th><th scope="col">`, strings.Join(jobsNames, `</th><th scope="col">`), `</th></tr></thead>`)
 	for _, version := range versions {
 		resp, e = httpClient.Get(versionsURL + "/" + strconv.Itoa(versionIDs[version]) + "/input_to")
 		Must(e)
@@ -100,17 +100,16 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 		for _, jobName := range jobsNames {
 			status := buildSet[jobName]
 			if status == "succeeded" {
-				status = "<span style=\"color:green\">✔</span>"
+				status = `<button type="button" class="btn btn-success"> </button>`
 			}
 			if status == "failed" {
-				status = "<span style=\"color:red\">!</span>"
+				status = `<button type="button" class="btn btn-danger"> </button>`
 			}
 			fmt.Fprint(tempFile, "</td><td>", status)
 		}
 		fmt.Fprintln(tempFile, "</td></tr>")
 	}
 	fmt.Fprintln(tempFile, `</table>
-		</article>
 	</body>
 	</html>`)
 }
