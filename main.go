@@ -51,8 +51,10 @@ func main() {
 }
 
 func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Writer, versionsURL string) {
-	resp, e := httpClient.Get(versionsURL)
+	fmt.Println("GET", versionsURL+"?limit=5")
+	resp, e := httpClient.Get(versionsURL + "?limit=5")
 	Must(e)
+	fmt.Println("Response Code:", resp.StatusCode)
 
 	content, e := ioutil.ReadAll(resp.Body)
 	Must(e)
@@ -80,30 +82,36 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 	<body>
 	        <table class="table table-hover">`)
 
-	fmt.Fprintln(tempFile, `<thead><tr><th scope="col">version</th><th scope="col">`, strings.Join(jobsNames, `</th><th scope="col">`), `</th></tr></thead>`)
+	fmt.Fprintln(tempFile, `<thead><tr><th scope="col">`+*resourceToTrack+`</th><th scope="col">`, strings.Join(jobsNames, `</th><th scope="col">`), `</th></tr></thead>`)
 	for _, version := range versions {
+		fmt.Println("GET", versionsURL+"/"+strconv.Itoa(versionIDs[version])+"/input_to", "...")
 		resp, e = httpClient.Get(versionsURL + "/" + strconv.Itoa(versionIDs[version]) + "/input_to")
 		Must(e)
+		fmt.Println("Response Code:", resp.StatusCode)
+
 		content, e = ioutil.ReadAll(resp.Body)
 		Must(e)
 
 		var builds []atc.Build
 		Must(json.Unmarshal(content, &builds))
-		buildSet := make(map[string]string)
+		buildStatuses := make(map[string]atc.BuildStatus)
 
 		for _, build := range builds {
-			if buildSet[build.JobName] != "succeeded" {
-				buildSet[build.JobName] = build.Status
+			if buildStatuses[build.JobName] != atc.StatusSucceeded {
+				buildStatuses[build.JobName] = atc.BuildStatus(build.Status)
 			}
 		}
 		fmt.Fprint(tempFile, "<tr><td>", version)
 		for _, jobName := range jobsNames {
-			status := buildSet[jobName]
-			if status == "succeeded" {
+			status := buildStatuses[jobName]
+			if status == atc.StatusSucceeded {
 				status = `<button type="button" class="btn btn-success"> </button>`
 			}
-			if status == "failed" {
+			if status == atc.StatusFailed {
 				status = `<button type="button" class="btn btn-danger"> </button>`
+			}
+			if status == atc.StatusStarted {
+				status = `<button type="button" class="btn btn-warning"> </button>`
 			}
 			fmt.Fprint(tempFile, "</td><td>", status)
 		}
