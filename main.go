@@ -56,6 +56,11 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 	Must(e)
 	fmt.Println("Response Code:", resp.StatusCode)
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		fmt.Fprintln(tempFile, "You are not authorized. Please log in first, via fly login.")
+		return
+	}
+
 	content, e := ioutil.ReadAll(resp.Body)
 	Must(e)
 	var vrs []atc.VersionedResource
