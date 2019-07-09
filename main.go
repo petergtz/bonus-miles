@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,42 +13,99 @@ import (
 	"strings"
 	"time"
 
-	"github.com/concourse/atc"
-	"github.com/concourse/fly/rc"
+	"github.com/concourse/concourse/atc"
+	"github.com/concourse/concourse/fly/rc"
+	"github.com/concourse/concourse/go-concourse/concourse"
+	"golang.org/x/oauth2"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
-	targetName      = kingpin.Flag("target", "Concourse Target").Required().Short('t').String()
+	targetName      = kingpin.Flag("target", "Concourse Target").Short('t').String()
+	username        = kingpin.Flag("username", "Username").Short('u').String()
+	password        = kingpin.Flag("password", "Password").Short('p').String()
+	teamName        = kingpin.Flag("teamname", "Concourse team name (only needed when logging in with username and password)").String()
+	url             = kingpin.Flag("url", "Concourse URL (only needed when logging in with username and password)").String()
 	resourceToTrack = kingpin.Flag("resource", "Resource to track").Required().Short('r').String()
-	pipeline        = kingpin.Flag("pipeline", "Pipeline").Required().Short('p').String()
-	shouldAutoOpen  = kingpin.Flag("open", "Automatically open the markdown file in the application associated with the *.md file extension.").Default("false").Short('a').Bool()
+	pipeline        = kingpin.Flag("pipeline", "Pipeline").Required().Short('n').String()
+	runLocally      = kingpin.Flag("local", "TODO").Default("false").Short('l').Bool()
+	shouldAutoOpen  = kingpin.Flag("open", "Automatically open browser window.").Default("false").Short('a').Bool()
 )
 
 func main() {
 	kingpin.Parse()
+	if *targetName != "" && *username != "" {
+		kingpin.FatalUsage("Please provide either --target or --username and --password, not both")
+	}
+	if *targetName == "" && *username == "" {
+		kingpin.FatalUsage("Please provide either --target or --username and --password")
+	}
+	var (
+		target rc.Target
+		e      error
+	)
+
+	if *targetName == "" {
+		target, e = rc.NewUnauthenticatedTarget("irrelevant-target-name", *url, *teamName, true, "", true)
+		tokenType, accessToken, e := passwordGrant(target.Client(), *username, *password)
+		Must(e)
+		rc.SaveTarget(
+			"bonus-miles",
+			*url,
+			true,
+			*teamName,
+			&rc.TargetToken{
+				Type:  tokenType,
+				Value: accessToken,
+			},
+			"",
+		)
+		*targetName = "bonus-miles"
+	}
+	target, e = rc.LoadTarget(rc.TargetName(*targetName), true)
+	Must(e)
+
+	fmt.Printf("Target: %#v\n\n", target)
+
 	input, e := ioutil.ReadAll(os.Stdin)
 	Must(e)
 	jobsNames := strings.Split(string(input), "\n")
 
-	target, e := rc.LoadTarget(rc.TargetName(*targetName), true)
-
-	Must(e)
 	httpClient := target.Client().HTTPClient()
 
 	http.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
 		generateOutput(httpClient, jobsNames, rw, target.URL()+"/api/v1/teams/"+target.Team().Name()+"/pipelines/"+*pipeline+"/resources/"+*resourceToTrack+"/versions")
 	})
-	addr := "127.0.0.1:12345"
-	go func() {
-		time.Sleep(time.Second)
-		fmt.Println("Server running at:", "http://"+addr)
-		if *shouldAutoOpen {
-			Must(exec.Command("open", "http://"+addr).Run())
-		}
-	}()
+	addr := ":" + os.Getenv("PORT")
+	if *runLocally {
+		addr = "127.0.0.1:12345"
+		go func() {
+			time.Sleep(time.Second)
+			fmt.Println("Server running at:", "http://"+addr)
+			if *shouldAutoOpen {
+				Must(exec.Command("open", "http://"+addr).Run())
+			}
+		}()
+	}
 	e = http.ListenAndServe(addr, nil)
 	Must(e)
+}
+
+func passwordGrant(client concourse.Client, username, password string) (string, string, error) {
+	oauth2Config := oauth2.Config{
+		ClientID:     "fly",
+		ClientSecret: "Zmx5",
+		Endpoint:     oauth2.Endpoint{TokenURL: client.URL() + "/sky/token"},
+		Scopes:       []string{"openid", "profile", "email", "federated:id", "groups"},
+	}
+
+	token, err := oauth2Config.PasswordCredentialsToken(
+		context.WithValue(context.Background(), oauth2.HTTPClient, client.HTTPClient()),
+		username, password)
+	if err != nil {
+		return "", "", err
+	}
+	return token.TokenType, token.AccessToken, nil
 }
 
 func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Writer, versionsURL string) {
@@ -63,7 +121,7 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 
 	content, e := ioutil.ReadAll(resp.Body)
 	Must(e)
-	var vrs []atc.VersionedResource
+	var vrs []atc.ResourceVersion
 	Must(json.Unmarshal(content, &vrs))
 
 	if len(vrs) == 0 {
