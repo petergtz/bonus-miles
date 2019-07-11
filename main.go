@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,15 +21,13 @@ import (
 )
 
 var (
-	targetName      = kingpin.Flag("target", "Concourse Target").Short('t').String()
-	username        = kingpin.Flag("username", "Username").Short('u').String()
-	password        = kingpin.Flag("password", "Password").Short('p').String()
-	teamName        = kingpin.Flag("teamname", "Concourse team name (only needed when logging in with username and password)").String()
-	url             = kingpin.Flag("url", "Concourse URL (only needed when logging in with username and password)").String()
-	resourceToTrack = kingpin.Flag("resource", "Resource to track").Required().Short('r').String()
-	pipeline        = kingpin.Flag("pipeline", "Pipeline").Required().Short('n').String()
-	runLocally      = kingpin.Flag("local", "TODO").Default("false").Short('l').Bool()
-	shouldAutoOpen  = kingpin.Flag("open", "Automatically open browser window.").Default("false").Short('a').Bool()
+	targetName     = kingpin.Flag("target", "Concourse Target").Short('t').String()
+	username       = kingpin.Flag("username", "Username").Short('u').String()
+	password       = kingpin.Flag("password", "Password").Short('p').String()
+	teamName       = kingpin.Flag("teamname", "Concourse team name (only needed when logging in with username and password)").String()
+	url            = kingpin.Flag("url", "Concourse URL (only needed when logging in with username and password)").String()
+	runLocally     = kingpin.Flag("local", "When set runs the server on 127.0.0.1:12345").Default("false").Short('l').Bool()
+	shouldAutoOpen = kingpin.Flag("open", "Automatically open browser window.").Default("false").Short('a').Bool()
 )
 
 func main() {
@@ -67,14 +65,10 @@ func main() {
 
 	fmt.Printf("Target: %#v\n\n", target)
 
-	input, e := ioutil.ReadAll(os.Stdin)
-	Must(e)
-	jobsNames := strings.Split(string(input), "\n")
-
 	httpClient := target.Client().HTTPClient()
 
 	http.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
-		generateOutput(httpClient, jobsNames, rw, target.URL()+"/api/v1/teams/"+target.Team().Name()+"/pipelines/"+*pipeline+"/resources/"+*resourceToTrack+"/versions")
+		generateOutput(httpClient, rw, req, target.URL())
 	})
 	addr := ":" + os.Getenv("PORT")
 	if *runLocally {
@@ -108,14 +102,28 @@ func passwordGrant(client concourse.Client, username, password string) (string, 
 	return token.TokenType, token.AccessToken, nil
 }
 
-func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Writer, versionsURL string) {
-	fmt.Println("GET", versionsURL+"?limit=5")
+var urlPattern = regexp.MustCompile(`/api/v1/teams/(.*)/pipelines/(.*)/resources/(.*)/progress`)
+
+func generateOutput(httpClient *http.Client, rw http.ResponseWriter, req *http.Request, apiURL string) {
+	matches := urlPattern.FindStringSubmatch(req.URL.Path)
+	if len(matches) != 4 {
+		http.Error(rw, "Bad Request", http.StatusBadRequest)
+		return
+	}
+	teamName := matches[1]
+	pipeline := matches[2]
+	resourceToTrack := matches[3]
+
+	jobNames := strings.Split(req.URL.Query().Get("jobs"), "|")
+
+	versionsURL := apiURL + "/api/v1/teams/" + teamName + "/pipelines/" + pipeline + "/resources/" + resourceToTrack + "/versions"
+
 	resp, e := httpClient.Get(versionsURL + "?limit=5")
 	Must(e)
 	fmt.Println("Response Code:", resp.StatusCode)
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		fmt.Fprintln(tempFile, "You are not authorized. Please log in first, via fly login.")
+		http.Error(rw, "You are not authorized. Please log in first, via fly login.", http.StatusUnauthorized)
 		return
 	}
 
@@ -136,7 +144,7 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 		versions = append(versions, v)
 	}
 
-	fmt.Fprintln(tempFile, `<html>
+	fmt.Fprintln(rw, `<html>
 	<head>
 		<link rel="stylesheet" href="https://bootswatch.com/4/darkly/bootstrap.css" media="screen">
 		<link rel="stylesheet" href="https://bootswatch.com/_assets/css/custom.min.css">
@@ -145,7 +153,7 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 	<body>
 	        <table class="table table-hover">`)
 
-	fmt.Fprintln(tempFile, `<thead><tr><th scope="col">`+*resourceToTrack+`</th><th scope="col">`, strings.Join(jobsNames, `</th><th scope="col">`), `</th></tr></thead>`)
+	fmt.Fprintln(rw, `<thead><tr><th scope="col">`+resourceToTrack+`</th><th scope="col">`, strings.Join(jobNames, `</th><th scope="col">`), `</th></tr></thead>`)
 	for _, version := range versions {
 		fmt.Println("GET", versionsURL+"/"+strconv.Itoa(versionIDs[version])+"/input_to", "...")
 		resp, e = httpClient.Get(versionsURL + "/" + strconv.Itoa(versionIDs[version]) + "/input_to")
@@ -164,8 +172,8 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 				buildStatuses[build.JobName] = atc.BuildStatus(build.Status)
 			}
 		}
-		fmt.Fprint(tempFile, "<tr><td>", version)
-		for _, jobName := range jobsNames {
+		fmt.Fprint(rw, "<tr><td>", version)
+		for _, jobName := range jobNames {
 			status := buildStatuses[jobName]
 			if status == atc.StatusSucceeded {
 				status = `<button type="button" class="btn btn-success"> </button>`
@@ -176,11 +184,11 @@ func generateOutput(httpClient *http.Client, jobsNames []string, tempFile io.Wri
 			if status == atc.StatusStarted {
 				status = `<button type="button" class="btn btn-warning"> </button>`
 			}
-			fmt.Fprint(tempFile, "</td><td>", status)
+			fmt.Fprint(rw, "</td><td>", status)
 		}
-		fmt.Fprintln(tempFile, "</td></tr>")
+		fmt.Fprintln(rw, "</td></tr>")
 	}
-	fmt.Fprintln(tempFile, `</table>
+	fmt.Fprintln(rw, `</table>
 	</body>
 	</html>`)
 }
